@@ -1,0 +1,2 @@
+FMP_KEY = "5FlsIxihzXghtlubUy5bIA9dLYy0mkTp"
+API_KEY = "LSF3KAMUXTIWSQZP"
