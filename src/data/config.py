@@ -1,4 +1,5 @@
-API_KEY=f""
-FMP_KEY=f"5FlsIxihzXghtlubUy5bIA9dLYy0mkTp"
-NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt"
-OTHER_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt"
+import numpy as np
+
+KAPPA = 5
+NUM_OF_FILTERS = 5
+SIGMA_V = np.sqrt(0.05)
