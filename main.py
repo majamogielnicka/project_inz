@@ -1,8 +1,8 @@
 import numpy as np
 
 from data.stock_data import get_stock_data
-from data.irw import IRWmodel, KalmanFilter
-from data.config import SIGMA_V, KAPPA
+from estimation.irw import IRWmodel, KalmanFilter
+from helpers.config import SIGMA_V, KAPPA
 
 
 if __name__ == "__main__":

@@ -1,8 +1,9 @@
-from irw import KalmanFilter, IRWmodel
 import numpy as np
-from shared import get_initial_state
-from stock_data import get_stock_data
-from config import KAPPA, SIGMA_V, NUM_OF_FILTERS
+
+from estimation.irw import KalmanFilter, IRWmodel
+from helpers.shared import get_initial_state
+from data.stock_data import get_stock_data
+from helpers.config import KAPPA, SIGMA_V, NUM_OF_FILTERS
 
 
 def calculate_weighted_sum(weights: list[float], forecasts_per_model: list[float]
@@ -64,7 +65,6 @@ def run_ckf(prices: list[float], filter_orders: list[int], sigma_v2: float,
     if verbose:
         print(f"warmup_prices (ostatnie 5): {warmup_prices[-5:]}")
         print(f"window_prices (do oceny): {window_prices}")
-        print("===")
 
     forecasts_on_window = {}
     eta_values = {}
@@ -109,7 +109,7 @@ def run_ckf(prices: list[float], filter_orders: list[int], sigma_v2: float,
     ]
 
     if print_final:
-        print("\n=== Koncowa polaczona prognoza (Ŝ_k) ===")
+        print("\n Koncowa polaczona prognoza (Ŝ_k)")
         for l in range(L):
             print(f"l={l+1}: S_hat = {combined_forecasts[l]:.3f}, prawdziwa wartosc = {window_prices[l]:.3f}")
 
@@ -122,7 +122,7 @@ def run_kappa_experiment(prices, filter_orders, sigma_v2, L, kappa_values):
         na tych samych danych.
     """
     for kappa_test in kappa_values:
-        print(f"\n=== kappa = {kappa_test} ===")
+        print(f"\nkappa = {kappa_test}")
         weights, forecasts_on_window, window_prices = run_ckf(
             prices, filter_orders=filter_orders,
             sigma_v2=sigma_v2, kappa=kappa_test, L=L, verbose=False, print_final=False
@@ -149,7 +149,7 @@ def run_sigma_v2_experiment(prices, filter_orders, kappa, L, sigma_v2_values):
         przy ustalonym kappa.
     """
     for sigma_test in sigma_v2_values:
-        print(f"\n=== sigma_v2 = {sigma_test} (kappa={kappa}) ===")
+        print(f"\n sigma_v2 = {sigma_test} (kappa={kappa})")
         weights, forecasts_on_window, window_prices = run_ckf(
             prices, filter_orders=filter_orders,
             sigma_v2=sigma_test, kappa=kappa, L=L, verbose=False, print_final=False
