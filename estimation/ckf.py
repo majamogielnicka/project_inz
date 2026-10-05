@@ -2,243 +2,114 @@ import numpy as np
 
 from estimation.irw import KalmanFilter, IRWmodel
 from helpers.shared import get_initial_state
-from data.stock_data import get_stock_data
-from helpers.config import KAPPA, SIGMA_V, NUM_OF_FILTERS
 
 
-def calculate_weighted_sum(weights: list[float], forecasts_per_model: list[float]
-        ) -> float:
+def calculate_weighted_sum(weights: list[float], forecasts_per_model: list[float]) -> float:
     """
-        Ŝ_k = sum_{i=1}^{R} mu^i_k * Ŝ^i_k
+        S_hat_k = sum_i mu^i_k * S_hat^i_k
+
+        przyjmuje:
+            weights: wektor wag modeli
+            forecasts_per_model: wektor prognoz wszystkich modeli na jeden dzien (po jednej na model)
+        zwraca: jedna prognoze ceny (srednia wazona modeli)
     """
-    weighted_sum = 0.0
-    for i in range(len(weights)):
-        weighted_sum += weights[i] * forecasts_per_model[i]
-    return weighted_sum
+    # np.dot: mnozy wagi przez prognozy element po elemencie i sumuje wyniki
+    return float(np.dot(weights, forecasts_per_model))
 
 
-def compute_prediction_error_vector(actual_values: list[float], predicted_values: list[float]
-        ) -> list[float]:
+def compute_eta(steps: int, actual_values: list[float], predicted_values: list[float]) -> float:
     """
-        returns vector: eps^i_{k+l|k}
-        size: (L,)
-    """
-    actual = np.asarray(actual_values, dtype=float)
-    predicted = np.asarray(predicted_values, dtype=float)
-    return actual - predicted
+        eta^i_k = (suma kwadratow bledow prognozy) ** (-L/2)
+        mniejszy blad daje wieksze eta, czyli wieksza waga modelu
 
-
-def compute_eta(steps: int, actual_values: list[float], predicted_values: list[float]
-        ) -> float:
+        przyjmuje:
+            steps: L, liczba dni oceny
+            actual_values: wektor faktycznych cen z dni oceny
+            predicted_values: wektor prognoz modelu na te same dni
+        zwraca: eta modelu
     """
-        steps: L
-        returns: eta
-    """
-    prediction_error_vector = compute_prediction_error_vector(actual_values, predicted_values)
-    epsilon_powered = prediction_error_vector ** 2
-    absolute_sum = abs(np.sum(epsilon_powered))
-    eta = float(absolute_sum ** (-steps / 2))
-    return eta
+    # np.asarray: lista -> tablica numpy; np.sum: suma elementow
+    errors = np.asarray(actual_values, dtype=float) - np.asarray(predicted_values, dtype=float)
+    return float(np.sum(errors ** 2) ** (-steps / 2))
 
 
 def compute_weights(eta_values: list[float]) -> list[float]:
     """
         mu^i_k = eta^i_k / sum_j(eta^j_k)
-        returns: vector of weights mu^i_k, size (R,)
+
+        przyjmuje: eta_values: wektor eta, po jednej na model
+        zwraca: wektor wag modeli (suma wag wynosi 1)
     """
     eta = np.asarray(eta_values, dtype=float)
     return (eta / np.sum(eta)).tolist()
 
 
-def run_ckf(prices: list[float], filter_orders: list[int], sigma_v2: float,
-            kappa: float, L: int, verbose: bool = True, print_final: bool = True):
+def combine_forecasts(weights: dict[int, float], forecasts_per_model: dict[int, list[float]],
+                      steps: int) -> list[float]:
     """
-        Pełny flow CKF: trening filtrów r=filter_orders na warmup_prices,
-        ocena bledu na window_prices, wagi, polaczona prognoza.
+        Laczy prognozy wszystkich modeli w jedna, dzien po dniu.
+        zwraca: wektor polaczonej prognozy cen, po jednej cenie na dzien
+    """
+    orders = list(weights)
 
-        returns: (weights: dict[int,float], forecasts_on_window: dict[int,list[float]],
-                  window_prices: list[float])
+    prognosis = [calculate_weighted_sum([weights[order] for order in orders],
+                                   [forecasts_per_model[order][day] for order in orders])
+            for day in range(steps)]
+
+    return prognosis
+
+
+def train_filter(order: int, train_prices: list[float], sigma_v2: float, kappa: float) -> KalmanFilter:
+    """
+        Tworzy filtr Kalmana danego rzedu i przepuszcza przez niego ceny po kolei.
+
+        przyjmuje: order: rzad modelu, train_prices: ceny do nauki, sigma_v2 i kappa: parametry modelu
+        zwraca: nauczony filtr (gotowy do kf.forecast)
+    """
+    model = IRWmodel(order, sigma_v2, kappa)
+    kf = KalmanFilter(model=model, x0=get_initial_state(train_prices, order))
+    for price in train_prices:
+        kf.predict()
+        kf.update(price)
+    return kf
+
+
+def run_ckf(prices: list[float], filter_orders: list[int], sigma_v2: float,
+            kappa: float, L: int):
+    """
+        Ocenia modele: uczy filtry na cenach bez ostatnich L dni, prognozuje te L dni
+        i na podstawie bledow nadaje modelom wagi.
+
+        przyjmuje: prices: wektor calej historii cen, filter_orders: lista rzedow modeli, L: liczba dni oceny
+        zwraca: weights (slownik: rzad modelu, waga),
+            forecasts_on_window (slownik: rzad modelu, wektor prognoz na dni oceny),
+            window_prices (wektor faktycznych cen z dni oceny)
     """
     warmup_prices = prices[:-L]
     window_prices = prices[-L:]
 
-    if verbose:
-        print(f"warmup_prices (ostatnie 5): {warmup_prices[-5:]}")
-        print(f"window_prices (do oceny): {window_prices}")
-
     forecasts_on_window = {}
-    eta_values = {}
-
+    eta_values = []
     for order in filter_orders:
-        model = IRWmodel(order, sigma_v2, kappa)
+        kf = train_filter(order, warmup_prices, sigma_v2, kappa)
+        forecasts_on_window[order] = [kf.forecast(day) for day in range(1, L + 1)]
+        eta_values.append(compute_eta(L, window_prices, forecasts_on_window[order]))
 
-        x0 = get_initial_state(warmup_prices, order)
-        kf = KalmanFilter(model=model, x0=x0)
-
-        for S in warmup_prices:
-            kf.predict()
-            kf.update(S)
-            if verbose:
-                print(f"r={order}: S={S:.2f}, x_hat={np.round(kf.x, 3)}")
-
-        forecast_window = [kf.forecast(l) for l in range(1, L + 1)]
-        forecasts_on_window[order] = forecast_window
-
-        eta = compute_eta(L, window_prices, forecast_window)
-        eta_values[order] = eta
-
-        if verbose:
-            print(f"r={order}: prognoza na window: {[round(f,3) for f in forecast_window]}")
-            print(f"r={order}: eta = {eta:.6e}")
-            print("---")
-
-    weights_list = compute_weights(list(eta_values.values()))
-    weights = dict(zip(filter_orders, weights_list))
-
-    if verbose:
-        print("\nWagi (mu^i_k):")
-        for order, w in weights.items():
-            print(f"r={order}: waga = {w:.4f}")
-
-    combined_forecasts = [
-        calculate_weighted_sum(
-            list(weights.values()),
-            [forecasts_on_window[order][l] for order in filter_orders]
-        )
-        for l in range(L)
-    ]
-
-    if print_final:
-        print("\n Koncowa polaczona prognoza (Ŝ_k)")
-        for l in range(L):
-            print(f"l={l+1}: S_hat = {combined_forecasts[l]:.3f}, prawdziwa wartosc = {window_prices[l]:.3f}")
-
+    weights = dict(zip(filter_orders, compute_weights(eta_values)))
     return weights, forecasts_on_window, window_prices
 
 
-def run_kappa_experiment(prices, filter_orders, sigma_v2, L, kappa_values):
+def forecast_future_ckf(prices: list[float], filter_orders: list[int], sigma_v2: float,
+                        kappa: float, weights: dict[int, float], days: int) -> list[float]:
     """
-        Porownuje polaczona prognoze CKF dla roznych wartosci kappa,
-        na tych samych danych.
+        prognoza: uczy filtry na calej historii 
+        i prognozuje `days` dni w przyszlosc.
+
+        przyjmuje: weights: wagi z run_ckf, days: ile dni prognozowac
+        zwraca: wektor prognozowanych cen na kolejne dni
     """
-    for kappa_test in kappa_values:
-        print(f"\nkappa = {kappa_test}")
-        weights, forecasts_on_window, window_prices = run_ckf(
-            prices, filter_orders=filter_orders,
-            sigma_v2=sigma_v2, kappa=kappa_test, L=L, verbose=False, print_final=False
-        )
-        combined_forecasts = [
-            calculate_weighted_sum(
-                list(weights.values()),
-                [forecasts_on_window[order][l] for order in filter_orders]
-            )
-            for l in range(L)
-        ]
-        print(f"wagi: { {k: round(v,3) for k,v in weights.items()} }")
-        print(f"prognozy: {[round(f,2) for f in combined_forecasts]}")
-        print(f"prawdziwe: {[round(p,2) for p in window_prices]}")
-
-        errors = [abs(f - p) for f, p in zip(combined_forecasts, window_prices)]
-        print(f"blad bezwzgledny na kazdym kroku: {[round(e,2) for e in errors]}")
-        print(f"sredni blad bezwzgledny: {np.mean(errors):.3f}")
-
-
-def run_sigma_v2_experiment(prices, filter_orders, kappa, L, sigma_v2_values):
-    """
-        Porownuje polaczona prognoze CKF dla roznych wartosci sigma_v2,
-        przy ustalonym kappa.
-    """
-    for sigma_test in sigma_v2_values:
-        print(f"\n sigma_v2 = {sigma_test} (kappa={kappa})")
-        weights, forecasts_on_window, window_prices = run_ckf(
-            prices, filter_orders=filter_orders,
-            sigma_v2=sigma_test, kappa=kappa, L=L, verbose=False, print_final=False
-        )
-        combined_forecasts = [
-            calculate_weighted_sum(
-                list(weights.values()),
-                [forecasts_on_window[order][l] for order in filter_orders]
-            )
-            for l in range(L)
-        ]
-        print(f"wagi: { {k: round(v,3) for k,v in weights.items()} }")
-        print(f"prognozy: {[round(f,2) for f in combined_forecasts]}")
-        print(f"prawdziwe: {[round(p,2) for p in window_prices]}")
-
-        errors = [abs(f - p) for f, p in zip(combined_forecasts, window_prices)]
-        print(f"sredni blad bezwzgledny: {np.mean(errors):.3f}")
-
-
-def run_grid_experiment(prices, filter_orders, L, sigma_v2_values, kappa_values):
-    """
-        Siatka 2D: testuje kazda kombinacje sigma_v2 x kappa niezaleznie.
-    """
-    results = []
-    for sigma_test in sigma_v2_values:
-        for kappa_test in kappa_values:
-            weights, forecasts_on_window, window_prices = run_ckf(
-                prices, filter_orders=filter_orders,
-                sigma_v2=sigma_test, kappa=kappa_test, L=L, verbose=False, print_final=False
-            )
-            combined_forecasts = [
-                calculate_weighted_sum(
-                    list(weights.values()),
-                    [forecasts_on_window[order][l] for order in filter_orders]
-                )
-                for l in range(L)
-            ]
-            errors = [abs(f - p) for f, p in zip(combined_forecasts, window_prices)]
-            mean_error = float(np.mean(errors))
-            results.append((sigma_test, kappa_test, mean_error))
-            print(f"sigma_v2={sigma_test:>6}, kappa={kappa_test:>6} -> sredni blad = {mean_error:.3f}")
-
-    best = min(results, key=lambda r: r[2])
-    print(f"\nNajlepsza kombinacja: sigma_v2={best[0]}, kappa={best[1]}, blad={best[2]:.3f}")
-    return results
-
-
-FILTER_ORDERS = list(range(1, NUM_OF_FILTERS + 1))
-
-
-def run_for_numbers():
-    prices = [1,2,3,4,5,6,7,8,9,10,11,12]
-    return run_ckf(prices, filter_orders=FILTER_ORDERS, sigma_v2=SIGMA_V, kappa=KAPPA, L=2)
-
-
-def run_for_aapl():
-    prices = list(get_stock_data("AAPL", period="2y", interval="1d"))
-    return run_ckf(prices, filter_orders=FILTER_ORDERS, sigma_v2=SIGMA_V, kappa=KAPPA, L=5)
-
-
-def run_for_intel():
-    prices = list(get_stock_data("INTC", period="2y", interval="1d"))
-    return run_ckf(prices, filter_orders=FILTER_ORDERS, sigma_v2=SIGMA_V, kappa=KAPPA, L=5)
-
-
-def run_aapl_kappa_experiment():
-    prices = list(get_stock_data("AAPL", period="2y", interval="1d"))
-    run_kappa_experiment(
-        prices, filter_orders=FILTER_ORDERS, sigma_v2=SIGMA_V, L=5,
-        kappa_values=[0.8, 5, KAPPA, 100]
-    )
-
-
-def run_aapl_sigma_experiment():
-    prices = list(get_stock_data("AAPL", period="2y", interval="1d"))
-    run_sigma_v2_experiment(
-        prices, filter_orders=FILTER_ORDERS, kappa=KAPPA, L=5,
-        sigma_v2_values=[0.05, SIGMA_V, 1.0, 5.0, 20.0]
-    )
-
-
-def run_aapl_grid_experiment():
-    prices = list(get_stock_data("AAPL", period="2y", interval="1d"))
-    run_grid_experiment(
-        prices, filter_orders=FILTER_ORDERS, L=5,
-        sigma_v2_values=[0.05, SIGMA_V, 1.0, 5.0],
-        kappa_values=[0.8, 5, KAPPA, 100]
-    )
-
-
-if __name__ == "__main__":
-    run_for_aapl()
+    forecasts_per_model = {}
+    for order in filter_orders:
+        kf = train_filter(order, prices, sigma_v2, kappa)
+        forecasts_per_model[order] = [kf.forecast(day) for day in range(1, days + 1)]
+    return combine_forecasts(weights, forecasts_per_model, days)
