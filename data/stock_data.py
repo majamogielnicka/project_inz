@@ -4,7 +4,7 @@ import yfinance as yf
 period = "2y"
 interval = "1d"
 
-def get_stock_data(ticker, period, interval):
+def get_stock_data(ticker, period, interval, mode=None):
 
     stock = yf.Ticker(ticker)
 
@@ -19,7 +19,8 @@ def get_stock_data(ticker, period, interval):
             "Volume"
         ]
     ]
-    mode = get_mode()
+    if mode is None:
+        mode = get_mode()
     reversed = (historical_data)[mode].values
 
     return reversed

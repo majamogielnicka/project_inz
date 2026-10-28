@@ -4,8 +4,16 @@ from control.cost_function import plan_from_ckf
 from helpers.config import SIGMA_V, KAPPA, NUM_OF_FILTERS
 
 
+#kappa dynamiczne (>0, wybiare przez uzytkownika, najlepiej z gui)
+#liczba filtrów z gui
+
+#kappa dobrze dobierac do liczby filtrow, do rzędu
+
+#demonstracje jak działa i że działa
+
+
 def main():
-    ticker = "INTC"
+    ticker = "AAPL"
     days = 5
     cash = 5000.0
     number_of_stocks = 10.0
@@ -29,6 +37,7 @@ def main():
     print(f"{ticker}: cena {price_history[-1]:.2f}, prognoza: {forecast_prices}")
     print()
     print("dzien   cena   kup/sprzedaj   akcje po   wydatek")
+    print("                             transakcji          ")
 
     daily_plan = zip(prices, trades, stocks_before_trade)
 
