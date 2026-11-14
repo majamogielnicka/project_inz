@@ -1,7 +1,7 @@
 from data.stock_data import get_stock_data
 from estimation.ckf import run_ckf
 from control.cost_function import plan_from_ckf
-from helpers.config import SIGMA_V, KAPPA, NUM_OF_FILTERS
+from helpers.config import KAPPA, NUM_OF_FILTERS, FILTER_WINDOW, DATA_PERIOD
 
 
 #kappa dynamiczne (>0, wybiare przez uzytkownika, najlepiej z gui)
@@ -18,13 +18,13 @@ def main():
     cash = 5000.0
     number_of_stocks = 10.0
 
-    price_history = list(get_stock_data(ticker, "2y", "1d"))
+    price_history = list(get_stock_data(ticker, DATA_PERIOD, "1d"))[-FILTER_WINDOW:]
     filter_orders = list(range(1, NUM_OF_FILTERS + 1))
 
-    model_weights, _, _ = run_ckf(price_history, filter_orders, SIGMA_V, KAPPA, days)
+    model_weights, _, _ = run_ckf(price_history, filter_orders, KAPPA, days)
 
     trading_plan = plan_from_ckf(price_history, cash, number_of_stocks, filter_orders,
-                                 SIGMA_V, KAPPA, model_weights, days)
+                                 KAPPA, model_weights, days)
     if trading_plan["status"] != "ok":
         raise SystemExit(trading_plan["status"])
 

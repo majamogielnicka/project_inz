@@ -15,14 +15,15 @@ from matplotlib.figure import Figure
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from data.stock_data import get_stock_data
-from estimation.ckf import run_ckf, combine_forecasts
+from estimation.ckf import run_ckf, combine_forecasts, estimate_on_window_ckf
 from control.cost_function import plan_from_ckf
-from helpers.config import SIGMA_V, KAPPA, NUM_OF_FILTERS
+from helpers.config import KAPPA, NUM_OF_FILTERS, MAX_FILTER_WINDOW, DATA_PERIOD
 
 
-PRICE_MODES = {"Close": "Close", "Open": "Open", "High": "High", "Low": "Low"}
-PERIODS = ["6mo", "1y", "2y", "5y", "10y"]
-HISTORY_ON_PLOT = 60  # ile ostatnich dni historii pokazac na wykresie
+PRICE_MODES = {"Zamknięcia": "Close", "Otwarcia": "Open", "Najwyższa": "High", "Najniższa": "Low"}
+# okres wykresu i danych filtru -> liczba sesji gieldowych
+PERIODS = {"Rok": MAX_FILTER_WINDOW, "6 miesięcy": 126, "3 miesiące": 63, "Miesiąc": 21, "Tydzień": 5}
+DEFAULT_PERIOD = "3 miesiące"
 
 # paleta kolorow (ciemny motyw)
 BG = "#0e1117"
@@ -54,24 +55,29 @@ def run_analysis(params: dict) -> dict:
         przyjmuje: slownik parametrow z formularza
         zwraca: slownik z wynikami do wyswietlenia
     """
-    price_history = [float(price) for price in
-                     get_stock_data(params["ticker"], params["period"], "1d", params["mode"])]
+    all_prices = [float(price) for price in
+                  get_stock_data(params["ticker"], DATA_PERIOD, "1d", params["mode"])]
     days = params["days"]
-    if len(price_history) <= 2 * days:
-        raise ValueError("Za malo danych historycznych dla wybranego horyzontu")
+    min_window = days + params["num_filters"] + 1  # minimum, zeby dalo sie ocenic modele
+    if len(all_prices) < min_window:
+        raise ValueError(f"Dostepnych jest tylko {len(all_prices)} sesji, a dla tego horyzontu "
+                         f"i liczby filtrow potrzeba co najmniej {min_window}")
+    # mlodsza spolka: wycinek obejmie cala jej historie; krotki okres: filtr dostaje minimum sesji
+    price_history = all_prices[-max(PERIODS[params["period"]], min_window):]
 
     filter_orders = list(range(1, params["num_filters"] + 1))
     weights, forecasts_on_window, window_prices = run_ckf(
-        price_history, filter_orders, params["sigma_v2"], params["kappa"], days)
+        price_history, filter_orders, params["kappa"], days)
     window_combined = combine_forecasts(weights, forecasts_on_window, days)
+    estimates = estimate_on_window_ckf(price_history, filter_orders, params["kappa"], weights)
 
     plan = plan_from_ckf(price_history, params["cash"], params["stocks"], filter_orders,
-                         params["sigma_v2"], params["kappa"], weights, days,
+                         params["kappa"], weights, days,
                          params["spend_fraction"])
 
     return {"params": params, "price_history": price_history, "weights": weights,
             "forecasts_on_window": forecasts_on_window, "window_prices": window_prices,
-            "window_combined": window_combined, "plan": plan}
+            "window_combined": window_combined, "estimates": estimates, "plan": plan}
 
 
 def style_axes(ax):
@@ -98,14 +104,13 @@ class App(tk.Tk):
 
         self.vars = {
             "ticker": tk.StringVar(value="AAPL"),
-            "period": tk.StringVar(value="2y"),
-            "mode": tk.StringVar(value="Close"),
+            "period": tk.StringVar(value=DEFAULT_PERIOD),
+            "mode": tk.StringVar(value="Zamknięcia"),
             "days": tk.StringVar(value="5"),
             "cash": tk.StringVar(value="5000"),
             "stocks": tk.StringVar(value="10"),
             "kappa": tk.StringVar(value=str(KAPPA)),
             "num_filters": tk.StringVar(value=str(NUM_OF_FILTERS)),
-            "sigma_v2": tk.StringVar(value=f"{SIGMA_V:.4f}"),
             "spend_fraction": tk.StringVar(value="0.10"),
         }
         self.status = tk.StringVar(value="Gotowy")
@@ -244,9 +249,9 @@ class App(tk.Tk):
         data = section("Dane")
         row(data, 0, "Ticker", ttk.Entry(data, textvariable=self.vars["ticker"], width=10))
         row(data, 1, "Okres", ttk.Combobox(data, textvariable=self.vars["period"],
-                                           values=PERIODS, state="readonly", width=8))
+                                           values=list(PERIODS), state="readonly", width=8))
         row(data, 2, "Cena", ttk.Combobox(data, textvariable=self.vars["mode"],
-                                          values=list(PRICE_MODES), state="readonly", width=8))
+                                          values=list(PRICE_MODES), state="readonly", width=11))
 
         portfolio = section("Portfel")
         row(portfolio, 0, "Gotówka [$]", ttk.Entry(portfolio, textvariable=self.vars["cash"], width=10))
@@ -263,7 +268,6 @@ class App(tk.Tk):
         row(model, 2, "Kappa (> 0)",
             ttk.Spinbox(model, textvariable=self.vars["kappa"], from_=0.1, to=1000,
                         increment=0.5, width=8))
-        row(model, 3, "σ²ᵥ", ttk.Entry(model, textvariable=self.vars["sigma_v2"], width=10))
 
         hint = ttk.Label(parent, style="Hint.TLabel", padding=(10, 8), wraplength=240, justify=tk.LEFT, anchor=tk.W,
                          text="Kappę warto dobierać do liczby filtrów (rzędu modelu).")
@@ -372,7 +376,6 @@ class App(tk.Tk):
             "stocks": float(v["stocks"].replace(",", ".")),
             "kappa": float(v["kappa"].replace(",", ".")),
             "num_filters": int(v["num_filters"]),
-            "sigma_v2": float(v["sigma_v2"].replace(",", ".")),
             "spend_fraction": float(v["spend_fraction"].replace(",", ".")),
         }
         if params["kappa"] <= 0:
@@ -381,8 +384,6 @@ class App(tk.Tk):
             raise ValueError("Horyzont musi byc >= 1")
         if params["num_filters"] < 1:
             raise ValueError("Liczba filtrow musi byc >= 1")
-        if params["sigma_v2"] <= 0:
-            raise ValueError("sigma_v2 musi byc wieksze od 0")
         if params["cash"] < 0 or params["stocks"] < 0:
             raise ValueError("Gotowka i liczba akcji nie moga byc ujemne")
         if not 0 < params["spend_fraction"] <= 1:
@@ -450,6 +451,7 @@ class App(tk.Tk):
 
         self.heading.configure(text=params["ticker"])
         self.subheading.configure(text=f"{params['mode']} · {params['period']} · "
+                                       f"filtr na {len(result['price_history'])} sesjach · "
                                        f"{params['num_filters']} filtrów · κ = {params['kappa']:g}")
 
         self._set_card("price", f"${prices[0]:,.2f}",
@@ -459,7 +461,7 @@ class App(tk.Tk):
         self._set_card("value_after", f"${plan['V_after']:,.2f}", f"po {params['days']} dniach")
         self._set_card("profit", f"{profit:+,.2f} $", f"{100 * profit / value_now:+.2f}% wartości portfela",
                        GREEN if profit >= 0 else RED)
-        self._set_card("mae", f"{mae:.3f}", f"{100 * mae / prices[0]:.2f}% ceny · okno {params['days']} dni")
+        self._set_card("mae", f"${mae:,.3f}", f"{100 * mae / prices[0]:.2f}% ceny · okno {params['days']} dni")
 
         self.plan_table.delete(*self.plan_table.get_children())
         for day, (price, trade, stocks_before) in enumerate(zip(prices, plan["u_sequence"], plan["N_sequence"])):
@@ -474,7 +476,7 @@ class App(tk.Tk):
             model_mae = float(np.mean(np.abs(np.subtract(result["forecasts_on_window"][order],
                                                          result["window_prices"]))))
             self.weights_table.insert("", tk.END, tags=("even" if index % 2 else "odd",),
-                                      values=(order, f"{weight:.4f}", f"{model_mae:.3f}"))
+                                      values=(order, f"{weight:.4f}", f"${model_mae:,.3f}"))
 
         self._draw_chart(result)
         self._draw_weights(result["weights"])
@@ -490,11 +492,14 @@ class App(tk.Tk):
 
     def _draw_chart(self, result: dict):
         """
-            Gorny wykres: historia, prognoza na oknie oceny (test wsteczny) i prognoza w przyszlosc.
+            Gorny wykres: ceny z wybranego okresu, estymata filtru dzien po dniu i prognoza w przyszlosc.
             Dolny wykres: plan transakcji (ile akcji kupic/sprzedac w kazdym dniu).
         """
         params, plan = result["params"], result["plan"]
-        history = result["price_history"]
+        # filtr moze miec wiecej sesji niz wybrany okres, wykres pokazuje tylko ten okres
+        shown = PERIODS[params["period"]]
+        history = result["price_history"][-shown:]
+        estimates = result["estimates"][-shown:]
         days = params["days"]
         n = len(history)
 
@@ -503,26 +508,23 @@ class App(tk.Tk):
         style_axes(ax_price)
         style_axes(ax_trade)
 
-        start = max(0, n - HISTORY_ON_PLOT)
-        history_x = np.arange(start, n) - (n - 1)  # 0 = dzisiaj
-        history_y = history[start:]
-        window_x = np.arange(n - days, n) - (n - 1)
+        history_x = np.arange(n) - (n - 1)  # 0 = dzisiaj
+        history_y = history
         future_x = np.arange(0, days + 1)
 
-        visible = list(history_y) + list(result["window_combined"]) + list(plan["prices"])
+        visible = list(history_y) + list(estimates) + list(plan["prices"])
         low, high = min(visible), max(visible)
         margin = 0.08 * (high - low or 1)
         ax_price.set_ylim(low - margin, high + margin)
 
         # historia z wypelnieniem w stylu "area chart"
-        ax_price.plot(history_x, history_y, color=TEXT, linewidth=1.6, label="Historia", zorder=3)
+        ax_price.plot(history_x, history_y, color=TEXT, linewidth=1.6, label="Cena", zorder=3)
         ax_price.fill_between(history_x, history_y, low - margin, color=BLUE, alpha=0.12,
                               linewidth=0, zorder=1)
 
-        ax_price.axvspan(window_x[0] - 0.5, 0, color=AMBER, alpha=0.06, zorder=0)
         ax_price.axvspan(0, days + 0.5, color=ACCENT, alpha=0.07, zorder=0)
-        ax_price.plot(window_x, result["window_combined"], color=AMBER, linestyle="--", linewidth=1.6,
-                      marker="o", markersize=4, label="Prognoza CKF na oknie oceny", zorder=4)
+        ax_price.plot(history_x, estimates, color=AMBER, linewidth=1.6,
+                      label="Estymata filtru Kalmana", zorder=4)
 
         # prognoza z efektem "poswiaty"
         for width, alpha in ((9, 0.08), (5, 0.15)):

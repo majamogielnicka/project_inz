@@ -124,7 +124,7 @@ def solve_mpc_step(account_value: float, current_stocks: float, prices: list[flo
 
 
 def plan_from_ckf(price_history: list[float], money: float, number_of_stocks: float,
-                  filter_orders: list[int], sigma_v2: float, kappa: float,
+                  filter_orders: list[int], kappa: float,
                   weights: dict, days: int, spend_fraction: float = 0.10) -> dict:
     """
         Liczy prognoze cen na `days` dni i uruchamia
@@ -139,8 +139,7 @@ def plan_from_ckf(price_history: list[float], money: float, number_of_stocks: fl
     """
     from estimation.ckf import forecast_future_ckf
 
-    forecast = forecast_future_ckf(price_history, filter_orders=filter_orders,
-                                   sigma_v2=sigma_v2, kappa=kappa,
+    forecast = forecast_future_ckf(price_history, filter_orders=filter_orders, kappa=kappa,
                                    weights=weights, days=days)
     prices = [price_history[-1]] + list(forecast)
     account_value = compute_account_value(money, number_of_stocks, prices[0])

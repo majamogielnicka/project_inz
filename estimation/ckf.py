@@ -59,23 +59,24 @@ def combine_forecasts(weights: dict[int, float], forecasts_per_model: dict[int, 
     return prognosis
 
 
-def train_filter(order: int, train_prices: list[float], sigma_v2: float, kappa: float) -> KalmanFilter:
+def train_filter(order: int, train_prices: list[float], kappa: float) -> tuple[KalmanFilter, list[float]]:
     """
         Tworzy filtr Kalmana danego rzedu i przepuszcza przez niego ceny po kolei.
 
-        przyjmuje: order: rzad modelu, train_prices: ceny do nauki, sigma_v2 i kappa: parametry modelu
-        zwraca: nauczony filtr (gotowy do kf.forecast)
+        przyjmuje: order: rzad modelu, train_prices: ceny do nauki, kappa: parametr modelu
+        zwraca: nauczony filtr (gotowy do kf.forecast) i wektor estymat ceny S_hat_{k|k} z kazdego dnia
     """
-    model = IRWmodel(order, sigma_v2, kappa)
+    model = IRWmodel(order, kappa)
     kf = KalmanFilter(model=model, x0=get_initial_state(train_prices, order))
+    estimates = []
     for price in train_prices:
         kf.predict()
-        kf.update(price)
-    return kf
+        state, _ = kf.update(price)
+        estimates.append(float(state[0]))
+    return kf, estimates
 
 
-def run_ckf(prices: list[float], filter_orders: list[int], sigma_v2: float,
-            kappa: float, L: int):
+def run_ckf(prices: list[float], filter_orders: list[int], kappa: float, L: int):
     """
         Ocenia modele: uczy filtry na cenach bez ostatnich L dni, prognozuje te L dni
         i na podstawie bledow nadaje modelom wagi.
@@ -91,7 +92,7 @@ def run_ckf(prices: list[float], filter_orders: list[int], sigma_v2: float,
     forecasts_on_window = {}
     eta_values = []
     for order in filter_orders:
-        kf = train_filter(order, warmup_prices, sigma_v2, kappa)
+        kf, _ = train_filter(order, warmup_prices, kappa)
         forecasts_on_window[order] = [kf.forecast(day) for day in range(1, L + 1)]
         eta_values.append(compute_eta(L, window_prices, forecasts_on_window[order]))
 
@@ -99,7 +100,7 @@ def run_ckf(prices: list[float], filter_orders: list[int], sigma_v2: float,
     return weights, forecasts_on_window, window_prices
 
 
-def forecast_future_ckf(prices: list[float], filter_orders: list[int], sigma_v2: float,
+def forecast_future_ckf(prices: list[float], filter_orders: list[int],
                         kappa: float, weights: dict[int, float], days: int) -> list[float]:
     """
         prognoza: uczy filtry na calej historii 
@@ -110,6 +111,18 @@ def forecast_future_ckf(prices: list[float], filter_orders: list[int], sigma_v2:
     """
     forecasts_per_model = {}
     for order in filter_orders:
-        kf = train_filter(order, prices, sigma_v2, kappa)
+        kf, _ = train_filter(order, prices, kappa)
         forecasts_per_model[order] = [kf.forecast(day) for day in range(1, days + 1)]
     return combine_forecasts(weights, forecasts_per_model, days)
+
+
+def estimate_on_window_ckf(prices: list[float], filter_orders: list[int], kappa: float,
+                           weights: dict[int, float]) -> list[float]:
+    """
+        Estymata ceny dzien po dniu na calym oknie: filtry startuja od pierwszego dnia okna,
+        a ich estymaty sa laczone wagami z run_ckf.
+
+        zwraca: wektor estymat, po jednej na kazdy dzien z prices
+    """
+    estimates_per_model = {order: train_filter(order, prices, kappa)[1] for order in filter_orders}
+    return combine_forecasts(weights, estimates_per_model, len(prices))

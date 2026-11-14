@@ -1,26 +1,30 @@
 import numpy as np
 from math import comb
 
+# Wzmocnienie filtru zalezy tylko od kappa, wiec sigma_w mozna unormowac do 1
+MEASUREMENT_NOISE = 1.0
+
 
 class IRWmodel:
-    def __init__(self, model_order, process_noise, kappa):
+    def __init__(self, model_order, kappa):
 
-        measurment_noise = get_measurment_noise(kappa, process_noise)
+        process_noise = get_process_noise(kappa)
+        measurement_noise = MEASUREMENT_NOISE
 
         self.r = model_order
         self.process_noise = process_noise
-        self.measurment_noise = get_measurment_noise(kappa, process_noise)
+        self.measurement_noise = measurement_noise
         self.H = build_observation_matrix(model_order)
         self.F = build_state_transition_matrix(model_order)
         self.V = build_process_noise_covariance_matrix(model_order, process_noise)
-        self.W = build_measurment_covariance_matrix(measurment_noise)
+        self.W = build_measurement_covariance_matrix(measurement_noise)
 
     def step(self, x):
         """
         Not used currently, left as helper for later
         """
         v = sample_process_noise(self.r, self.process_noise)
-        w = np.random.normal(0, self.measurment_noise)
+        w = np.random.normal(0, self.measurement_noise)
         # x(k+1) = F x(k) + v(k)
         x_next = self.F @ x + v
         # S(k) = H x(k) + w(k)
@@ -38,7 +42,7 @@ class KalmanFilter:
         self.H = model.H
         self.V = model.V
         self.W = model.W  
-        self.measurment_noise = model.measurment_noise #dead code
+        self.measurement_noise = model.measurement_noise #dead code
         self.r = model.r
         self.P0 = np.eye(self.r)
         
@@ -103,13 +107,12 @@ class KalmanFilter:
         return float((self.H @ x_l)[0])
 
 
-def get_measurment_noise(kappa, process_noise):
+def get_process_noise(kappa):
     """
-        kappa = sigmav^2/sigmaw^2
-        returns raw measrument noise
+        kappa = sigmav^2/sigmaw^2, przy sigmaw = MEASUREMENT_NOISE
+        returns raw process noise
     """
-    process_noise_squared = process_noise**2
-    return np.sqrt(process_noise_squared / kappa)
+    return MEASUREMENT_NOISE * np.sqrt(kappa)
 
 
 def build_observation_matrix(model_order):
@@ -165,13 +168,13 @@ def build_process_noise_covariance_matrix(model_order, process_noise):
     return process_noise_covariance_matrix
 
 
-def build_measurment_covariance_matrix(measurment_noise):
+def build_measurement_covariance_matrix(measurement_noise):
     """
         W = cov[w_k] = [sigma_w^2]
         returns W matrix
         size: 1 x 1
     """
-    return np.array([[measurment_noise ** 2]])
+    return np.array([[measurement_noise ** 2]])
 
 
 def sample_process_noise(model_order, process_noise):
