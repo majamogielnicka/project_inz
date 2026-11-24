@@ -6,7 +6,7 @@ from helpers.shared import get_initial_state
 
 def calculate_weighted_sum(weights: list[float], forecasts_per_model: list[float]) -> float:
     """
-        S_hat_k = sum_i mu^i_k * S_hat^i_k
+        S_hat_{k+l} = sum_r alpha^(r)_k * S_hat^(r)_{k+l}
 
         przyjmuje:
             weights: wektor wag modeli
@@ -19,7 +19,7 @@ def calculate_weighted_sum(weights: list[float], forecasts_per_model: list[float
 
 def compute_eta(steps: int, actual_values: list[float], predicted_values: list[float]) -> float:
     """
-        eta^i_k = (suma kwadratow bledow prognozy) ** (-L/2)
+        eta^(r)_k = (suma kwadratow bledow prognozy) ** (-L/2)
         mniejszy blad daje wieksze eta, czyli wieksza waga modelu
 
         przyjmuje:
@@ -35,7 +35,7 @@ def compute_eta(steps: int, actual_values: list[float], predicted_values: list[f
 
 def compute_weights(eta_values: list[float]) -> list[float]:
     """
-        mu^i_k = eta^i_k / sum_j(eta^j_k)
+        alpha^(r)_k = eta^(r)_k / sum_i(eta^(i)_k)
 
         przyjmuje: eta_values: wektor eta, po jednej na model
         zwraca: wektor wag modeli (suma wag wynosi 1)
@@ -48,6 +48,8 @@ def combine_forecasts(weights: dict[int, float], forecasts_per_model: dict[int, 
                       steps: int) -> list[float]:
     """
         Laczy prognozy wszystkich modeli w jedna, dzien po dniu.
+
+        przyjmuje: weights: wagi modeli, forecasts_per_model: prognozy kazdego modelu, steps: liczba dni
         zwraca: wektor polaczonej prognozy cen, po jednej cenie na dzien
     """
     orders = list(weights)
@@ -103,7 +105,7 @@ def run_ckf(prices: list[float], filter_orders: list[int], kappa: float, L: int)
 def forecast_future_ckf(prices: list[float], filter_orders: list[int],
                         kappa: float, weights: dict[int, float], days: int) -> list[float]:
     """
-        prognoza: uczy filtry na calej historii 
+        Uczy filtry na calej historii cen
         i prognozuje `days` dni w przyszlosc.
 
         przyjmuje: weights: wagi z run_ckf, days: ile dni prognozowac
@@ -122,6 +124,7 @@ def estimate_on_window_ckf(prices: list[float], filter_orders: list[int], kappa:
         Estymata ceny dzien po dniu na calym oknie: filtry startuja od pierwszego dnia okna,
         a ich estymaty sa laczone wagami z run_ckf.
 
+        przyjmuje: weights: wagi z run_ckf
         zwraca: wektor estymat, po jednej na kazdy dzien z prices
     """
     estimates_per_model = {order: train_filter(order, prices, kappa)[1] for order in filter_orders}

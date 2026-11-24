@@ -21,7 +21,10 @@ class IRWmodel:
 
     def step(self, x):
         """
-        Not used currently, left as helper for later
+            Symuluje jeden krok modelu. Obecnie nieuzywane, zostawione na pozniej.
+
+            przyjmuje: x: obecny stan
+            zwraca: nastepny stan x(k+1) i pomiar S(k+1)
         """
         v = sample_process_noise(self.r, self.process_noise)
         w = np.random.normal(0, self.measurement_noise)
@@ -36,23 +39,17 @@ class IRWmodel:
 class KalmanFilter:
 
     def __init__(self, model, x0, P0 = None):
-        #TODO: make P0 more 'dynamic'?
 
         self.F = model.F
         self.H = model.H
         self.V = model.V
         self.W = model.W  
-        self.measurement_noise = model.measurement_noise #dead code
+        self.measurement_noise = model.measurement_noise  # nieuzywane
         self.r = model.r
-        self.P0 = np.eye(self.r)
+        # P_{0|0} = sigma_w^2 * I_R
+        self.P0 = model.W[0, 0] * np.eye(self.r) if P0 is None else P0
         
         x0 = np.asarray(x0, dtype=float)
-
-        if x0.shape != (self.r,):
-            raise ValueError(
-                f"x0 has to be the same size as model:  ({self.r},), "
-                f"and it is currently: {x0.shape}"
-            )
 
         self.x = x0
         self.P = np.asarray(self.P0, dtype=float)
@@ -76,16 +73,16 @@ class KalmanFilter:
             S - (self.H @ self.x_pred)[0]
         )
 
-        # mu = H P H^T + sigma_w^2
-        mu = (
+        # Q = H P H^T + sigma_w^2
+        Q = (
             self.H @ self.P_pred @ self.H.T
             + self.W
         )[0, 0]
 
-        # K = P H^T / mu
+        # K = P H^T / Q
         K = (
             self.P_pred @ self.H.T
-        ).flatten() / mu
+        ).flatten() / Q
 
         # x = x_pred + K epsilon
         self.x = (
@@ -93,10 +90,10 @@ class KalmanFilter:
             + K * epsilon
         )
 
-        # P = P_pred - mu K K^T
+        # P = P_pred - Q K K^T
         self.P = (
             self.P_pred
-            - mu * np.outer(K, K)
+            - Q * np.outer(K, K)
         )
 
         return self.x, self.P
@@ -109,18 +106,16 @@ class KalmanFilter:
 
 def get_process_noise(kappa):
     """
-        kappa = sigmav^2/sigmaw^2, przy sigmaw = MEASUREMENT_NOISE
-        returns raw process noise
+        kappa = sigma_v^2 / sigma_w^2, przy sigma_w = MEASUREMENT_NOISE
+        zwraca: sigma_v, odchylenie standardowe szumu procesu
     """
     return MEASUREMENT_NOISE * np.sqrt(kappa)
 
 
 def build_observation_matrix(model_order):
     """
-        H = [1 0 ... 0] 
-        returns vector H based on model order
-
-        size: 1 x r
+        H = [1 0 ... 0]
+        zwraca: macierz obserwacji H dla danego rzedu modelu, rozmiar (1, r)
     """
     observation_matrix = np.zeros((1, model_order))
     observation_matrix[0][0] = 1.0
@@ -134,8 +129,7 @@ def build_state_transition_matrix(model_order):
             [..   ..  ..   ..    ..]
             [0    0   ..   1      0]
 
-        returns F matrix based on model order
-        size: r x r
+        zwraca: macierz przejscia stanu F dla danego rzedu modelu, rozmiar (r, r)
     """
     f = []
 
@@ -160,8 +154,7 @@ def build_process_noise_covariance_matrix(model_order, process_noise):
             [sigma_v^2   0_{1x(r-1)}    ]
             [0_{(r-1)x1} 0_{(r-1)x(r-1)}]
 
-        returns V matrix based on model order
-        size: r x r
+        zwraca: macierz kowariancji szumu procesu V dla danego rzedu modelu, rozmiar (r, r)
     """
     process_noise_covariance_matrix = np.zeros((model_order, model_order))
     process_noise_covariance_matrix[0, 0] = process_noise ** 2
@@ -171,16 +164,15 @@ def build_process_noise_covariance_matrix(model_order, process_noise):
 def build_measurement_covariance_matrix(measurement_noise):
     """
         W = cov[w_k] = [sigma_w^2]
-        returns W matrix
-        size: 1 x 1
+        zwraca: macierz kowariancji szumu pomiaru W, rozmiar (1, 1)
     """
     return np.array([[measurement_noise ** 2]])
 
 
 def sample_process_noise(model_order, process_noise):
     """
-        returns v_k vector based on model order
-        size: (model_order,)
+        Losuje szum procesu v_k (niezerowy tylko pierwszy element).
+        zwraca: wektor v_k, rozmiar (r,)
     """
     proc_cov_matrix = np.zeros(model_order)
     proc_cov_matrix[0] = np.random.normal(0, process_noise)

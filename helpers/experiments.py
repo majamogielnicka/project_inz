@@ -8,7 +8,7 @@ def run_kappa_experiment(prices: list[float], filter_orders: list[int], L: int,
     """
         Sprawdza kazda wartosc kappa i wypisuje blad prognozy.
 
-        przyjmuje: lista wartosci kappa do przetestowania, L: liczba dni oceny
+        przyjmuje: kappa_values: lista wartosci kappa do przetestowania, L: liczba dni oceny
         zwraca: lista (kappa, sredni blad bezwzgledny)
     """
     results = []

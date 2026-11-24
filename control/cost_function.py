@@ -7,7 +7,7 @@ def compute_delta_s(prices: list[float]) -> list[float]:
         Delta_S_{k+1} = S_{k+1} - S_k
 
         przyjmuje: prices: [S_k, ..., S_{k+L}] - L+1 cen
-        zwraca:  wektor roznic cen, rozmiar (L,)
+        zwraca: wektor roznic cen, rozmiar (L,)
     """
     return np.diff(np.asarray(prices, dtype=float)).tolist()
 
@@ -15,6 +15,7 @@ def compute_delta_s(prices: list[float]) -> list[float]:
 def compute_account_value(money_input: float, number_of_stocks: float, price_of_stock_in_current_moment: float) -> float:
     """
         V_k = M_k + N_k * S_k
+
         zwraca: wartosc konta
     """
     return money_input + number_of_stocks * price_of_stock_in_current_moment
@@ -25,12 +26,13 @@ def compute_expected_profit(trades: list[float], stocks_before_trade: list[float
         FUNKCJA CELU
 
         sum_l (u_l + N_l) * Delta_S_{l+1}
-        trades- ile kupic/sprzedac
-        stocks_before_trade - liczba posiadanych akcji
-        delta_s: roznice cen z compute_delta_s
+
+        przyjmuje:
+            trades: ile akcji kupic/sprzedac w kazdym dniu
+            stocks_before_trade: liczba posiadanych akcji przed transakcja
+            delta_s: roznice cen z compute_delta_s
         zwraca: zysk lub strata konta po L dniach; V_{k+L} - V_k
     """
-    # np.dot: mnozy element po elemencie i sumuje wyniki
     return float(np.dot(np.add(trades, stocks_before_trade), delta_s))
 
 
@@ -48,10 +50,10 @@ def compute_value_after_horizon(account_value: float, trades: list[float],
 def build_lp_cost_vector(delta_s: list[float]) -> np.ndarray:
     """
         Wspolczynniki funkcji celu dla linprog. Zmienne: x = [u_0..u_{L-1}, N_0..N_{L-1}].
-        linprog minimalizuje
+        Minus, bo linprog minimalizuje, a my maksymalizujemy zysk.
 
         przyjmuje: delta_s: roznice cen (L)
-        zwraca: wektor c, rozmiar (2L)
+        zwraca: wektor c, rozmiar (2L,)
     """
     delta_s = np.asarray(delta_s, dtype=float)
 
@@ -63,8 +65,10 @@ def build_lp_problem(account_value: float, current_stocks: float, prices: list[f
     """
         Sklada macierze LP dla linprog. Zmienne: x = [u_0..u_{L-1}, N_0..N_{L-1}].
         - equality_matrix, equality_values: N_0 = obecna liczba akcji, N_l = N_{l-1} + u_{l-1}
-        - inequality_matrix, inequality_limits: konto nie spada ponizej zera w zadnym dniu (V >= 0)
-        - variable_limits: wydatek u_l * S_l w przedziale [spend_lower, spend_upper], N bez ograniczen
+        - inequality_matrix, inequality_limits (3L x 2L):
+            konto nie spada ponizej zera w zadnym dniu (V >= 0),
+            wydatek u_l * S_l w przedziale [spend_lower, spend_upper]
+        - variable_limits: u_l i N_l bez ograniczen (dozwolona krotka sprzedaz)
 
         przyjmuje:
             account_value: obecna wartosc konta [$]
@@ -75,21 +79,32 @@ def build_lp_problem(account_value: float, current_stocks: float, prices: list[f
     """
     prices = np.asarray(prices, dtype=float)
     delta_s = np.diff(prices)
-    horizon = len(delta_s) # L
-    price_at_decision = prices[:-1] # cena w dniu, w ktorym podejmujemy decyzje
+    horizon = len(delta_s)  # L
+    price_at_decision = prices[:-1]  # cena w dniu, w ktorym podejmujemy decyzje
 
     shifted = np.eye(horizon, k=-1)
-    equality_matrix = np.hstack([-shifted, np.eye(horizon) - shifted]) #skleja macierze obok siebie
+    equality_matrix = np.hstack([-shifted, np.eye(horizon) - shifted])  
     equality_values = np.zeros(horizon)             
     equality_values[0] = current_stocks
 
-    # np.tril(np.ones): macierz trojkatna dolna 
+    # -T diag(d): np.tril(np.ones) to macierz trojkatna dolna z jedynek
     negative_profit_matrix = -np.tril(np.ones((horizon, horizon))) * delta_s
-    inequality_matrix = np.hstack([negative_profit_matrix, negative_profit_matrix])
-    inequality_limits = np.full(horizon, float(account_value))
+    # W = diag(S_k, S_hat_{k+1}, ..., S_hat_{k+L-1}), 0 - macierz zerowa L x L
+    price_matrix = np.diag(price_at_decision)
+    zeros = np.zeros((horizon, horizon))
+    inequality_matrix = np.vstack([
+        np.hstack([negative_profit_matrix, negative_profit_matrix]),  # V >= 0
+        np.hstack([price_matrix, zeros]),                              # u_l S_l <= spend_upper
+        np.hstack([-price_matrix, zeros]),                             # -u_l S_l <= -spend_lower
+    ])
+    inequality_limits = np.concatenate([
+        np.full(horizon, float(account_value)),
+        np.full(horizon, float(spend_upper)),
+        np.full(horizon, -float(spend_lower)),
+    ])
 
-    variable_limits = [(spend_lower / s, spend_upper / s) for s in price_at_decision]
-    variable_limits += [(None, None)] * horizon
+    # linprog domyslnie zaklada zmienne >= 0, wiec trzeba jawnie zdjac ograniczenia
+    variable_limits = [(None, None)] * (2 * horizon)
     return {"cost_vector": build_lp_cost_vector(delta_s), "equality_matrix": equality_matrix, "equality_values": equality_values,
             "inequality_matrix": inequality_matrix, "inequality_limits": inequality_limits, "variable_limits": variable_limits, "L": horizon}
 
@@ -101,8 +116,8 @@ def solve_mpc_step(account_value: float, current_stocks: float, prices: list[flo
 
         zwraca: slownik
             status: "ok" albo komunikat bledu solvera (wtedy brak reszty kluczy)
-            u_sequence: ile akcji kupic/sprzedacw kazdym dniu, (L,)
-            N_sequence: liczba akcji przed transakcja w kazdym dniu,  (L,)
+            u_sequence: ile akcji kupic/sprzedac w kazdym dniu, rozmiar (L,)
+            N_sequence: liczba akcji przed transakcja w kazdym dniu, rozmiar (L,)
             objective: przewidywany zysk
             V_after: przewidywana wartosc konta po L dniach
     """
@@ -135,7 +150,7 @@ def plan_from_ckf(price_history: list[float], money: float, number_of_stocks: fl
             money: gotowka, number_of_stocks: liczba akcji
             weights: wagi modeli z run_ckf
         zwraca: to samo co solve_mpc_step plus klucz
-        prices: [dzisiejsza cena, prognoza...], rozmiar (days+1,)
+            prices: [dzisiejsza cena, prognoza...], rozmiar (days+1,)
     """
     from estimation.ckf import forecast_future_ckf
 

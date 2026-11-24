@@ -14,7 +14,7 @@ from matplotlib.figure import Figure
 # katalog projektu na sciezce importu, zeby dzialalo tez `python ui/app.py`
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from data.stock_data import get_stock_data
+from data.stock_data import get_stock_data, StockDataError
 from estimation.ckf import run_ckf, combine_forecasts, estimate_on_window_ckf
 from control.cost_function import plan_from_ckf
 from helpers.config import KAPPA, NUM_OF_FILTERS, MAX_FILTER_WINDOW, DATA_PERIOD
@@ -60,8 +60,13 @@ def run_analysis(params: dict) -> dict:
     days = params["days"]
     min_window = days + params["num_filters"] + 1  # minimum, zeby dalo sie ocenic modele
     if len(all_prices) < min_window:
-        raise ValueError(f"Dostepnych jest tylko {len(all_prices)} sesji, a dla tego horyzontu "
-                         f"i liczby filtrow potrzeba co najmniej {min_window}")
+        available = len(all_prices)
+        message = f"Spółka {params['ticker']} jest notowana zbyt krótko (liczba sesji: {available})."
+        if available >= 3:
+            message += (f" Przy horyzoncie L = {days} i liczbie filtrów {params['num_filters']} "
+                        f"wymagane jest minimum {min_window} sesji. "
+                        f"Zmniejsz horyzont lub liczbę filtrów (suma maks. {available - 1}).")
+        raise StockDataError(message)
     # mlodsza spolka: wycinek obejmie cala jej historie; krotki okres: filtr dostaje minimum sesji
     price_history = all_prices[-max(PERIODS[params["period"]], min_window):]
 
@@ -146,7 +151,9 @@ class App(tk.Tk):
                                ("*TCombobox*Listbox.background", SURFACE_2),
                                ("*TCombobox*Listbox.foreground", TEXT),
                                ("*TCombobox*Listbox.selectBackground", ACCENT),
-                               ("*TCombobox*Listbox.selectForeground", "#ffffff")]:
+                               ("*TCombobox*Listbox.selectForeground", "#ffffff"),
+                               # minimalna szerokosc okienek bledow, zeby byl widoczny tytul
+                               ("*Dialog.msg.width", -30)]:
             self.option_add(pattern, value)
 
         style = ttk.Style(self)
@@ -254,7 +261,7 @@ class App(tk.Tk):
                                           values=list(PRICE_MODES), state="readonly", width=11))
 
         portfolio = section("Portfel")
-        row(portfolio, 0, "Gotówka [$]", ttk.Entry(portfolio, textvariable=self.vars["cash"], width=10))
+        row(portfolio, 0, "Gotówka", ttk.Entry(portfolio, textvariable=self.vars["cash"], width=10))
         row(portfolio, 1, "Liczba akcji", ttk.Entry(portfolio, textvariable=self.vars["stocks"], width=10))
         row(portfolio, 2, "Limit / dzień",
             ttk.Spinbox(portfolio, textvariable=self.vars["spend_fraction"],
@@ -418,6 +425,10 @@ class App(tk.Tk):
         self.run_button.configure(text="Oblicz plan  →")
         try:
             result = self.future.result()
+        except StockDataError as error:
+            self.status.set("✕  Brak danych")
+            messagebox.showerror("Brak danych", str(error))
+            return
         except Exception as error:
             self.status.set("✕  Błąd obliczeń")
             messagebox.showerror("Blad", f"{type(error).__name__}: {error}")
@@ -492,8 +503,7 @@ class App(tk.Tk):
 
     def _draw_chart(self, result: dict):
         """
-            Gorny wykres: ceny z wybranego okresu, estymata filtru dzien po dniu i prognoza w przyszlosc.
-            Dolny wykres: plan transakcji (ile akcji kupic/sprzedac w kazdym dniu).
+            Wykres cen z wybranego okresu, estymata filtru dzien po dniu i prognoza w przyszlosc.
         """
         params, plan = result["params"], result["plan"]
         # filtr moze miec wiecej sesji niz wybrany okres, wykres pokazuje tylko ten okres
@@ -504,9 +514,8 @@ class App(tk.Tk):
         n = len(history)
 
         self.figure.clear()
-        ax_price, ax_trade = self.figure.subplots(2, 1, sharex=True, height_ratios=[3, 1])
+        ax_price = self.figure.add_subplot()
         style_axes(ax_price)
-        style_axes(ax_trade)
 
         history_x = np.arange(n) - (n - 1)  # 0 = dzisiaj
         history_y = history
@@ -543,16 +552,9 @@ class App(tk.Tk):
                           bbox=dict(boxstyle="round,pad=0.35", fc=ACCENT, ec=ACCENT), zorder=6)
 
         ax_price.set_ylabel("Cena [$]")
+        ax_price.set_xlabel("Dzień (0 = dziś)")
         ax_price.legend(loc="upper left", fontsize=9, frameon=True, facecolor=SURFACE_2,
                         edgecolor=BORDER, labelcolor=TEXT)
-
-        trades = plan["u_sequence"]
-        colors = [GREEN if trade >= 0 else RED for trade in trades]
-        ax_trade.bar(np.arange(len(trades)), trades, color=colors, width=0.55, zorder=3)
-        ax_trade.axhline(0, color=BORDER, linewidth=1)
-        ax_trade.margins(y=0.35)
-        ax_trade.set_ylabel("Kup / sprzedaj")
-        ax_trade.set_xlabel("Dzień (0 = dziś)")
 
         self.canvas.draw_idle()
 
@@ -578,11 +580,3 @@ class App(tk.Tk):
         ax.set_title("Udział modeli w prognozie", loc="left", fontsize=11, pad=10)
         self.weights_canvas.draw_idle()
 
-
-def main():
-    app = App()
-    app.mainloop()
-
-
-if __name__ == "__main__":
-    main()
